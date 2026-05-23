@@ -2499,7 +2499,9 @@ function restoreData(e){
       const b=JSON.parse(ev.target.result);
       if(!b.data||!Array.isArray(b.data))throw new Error('Invalid backup');
       data=b.data;consultants=b.consultants||consultants;sites=b.sites||sites;pemTypes=b.pemTypes||pemTypes;customColumns=b.customColumns||customColumns;nextId=b.nextId||nextId;
-      saveLS();updateBadges();activeTab==='dash'?renderDash():renderCands();showToast('Backup restored');
+      saveLS(); // This now saves to both localStorage AND Supabase
+      updateBadges();activeTab==='dash'?renderDash():renderCands();
+      showToast('Backup restored and synced to database');
     }catch(err){showToast('Invalid backup file');}
   };
   reader.readAsText(file);e.target.value='';
@@ -3287,6 +3289,178 @@ const SEED=[
   {id:12,consultant:'Anne',candidate:'Gabriela Opazo',email:'g.opazo99@gmail.com',mobile:'0487 492 069',dob:'22.07.1999',roster:'8:6',mobeDate:'2026-06-03',position:'Rig Geologist',positionNo:'',contractType:'',woEndDate:'',site:'Christmas Creek',placementNo:'PL508642B',fieldglassNo:'',fgJP:'Submitted',fgWO:'Not Started',flightStatus:'',flightNotes:'',pemDate:'2026-05-12',pemClinic:'KINNECT Belmont',pemType:'Light',pemResult:'',notes:'',archived:false,archiveReason:'',checks:{preAppForm:'Complete',workproDd:'Sent',brunelInduction:'Sent',contract:'',ppe:'',cms:'',fmgInductions:'',f2fInduction:'',rollRoster:''},cdates:{},cknotes:{},log:[]},
 ];
 
+// ── SUPABASE CONFIG ───────────────────────────────────────────────────────
+const SUPABASE_URL='https://stwwvgvykgpioxmmidvi.supabase.co';
+const SUPABASE_KEY='sb_publishable_0cvTFSGRZNC0RtsTsQVRRA_b04uuXTI';
+
+// Supabase REST helpers
+async function sbGet(table){
+  const r=await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`,{
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+sbToken(),'Content-Type':'application/json'}
+  });
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbUpsert(table,row){
+  const r=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{
+    method:'POST',
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+sbToken(),'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=representation'},
+    body:JSON.stringify(row)
+  });
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbDelete(table,match){
+  const params=Object.entries(match).map(([k,v])=>`${k}=eq.${encodeURIComponent(v)}`).join('&');
+  const r=await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`,{
+    method:'DELETE',
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+sbToken(),'Content-Type':'application/json'}
+  });
+  if(!r.ok) throw new Error(await r.text());
+}
+function sbToken(){
+  try{const s=localStorage.getItem('sb_session');return s?JSON.parse(s).access_token:SUPABASE_KEY;}catch(e){return SUPABASE_KEY;}
+}
+
+// ── SUPABASE AUTH ─────────────────────────────────────────────────────────
+async function sbSignIn(email,password){
+  const r=await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`,{
+    method:'POST',
+    headers:{'apikey':SUPABASE_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email,password})
+  });
+  const d=await r.json();
+  if(!r.ok) throw new Error(d.error_description||d.message||'Login failed');
+  localStorage.setItem('sb_session',JSON.stringify(d));
+  localStorage.setItem('mp_user',JSON.stringify({email:d.user.email,name:d.user.user_metadata?.name||d.user.email.split('@')[0],ts:Date.now()}));
+  return d;
+}
+async function sbSignOut(){
+  try{
+    await fetch(`${SUPABASE_URL}/auth/v1/logout`,{
+      method:'POST',
+      headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+sbToken()}
+    });
+  }catch(e){}
+  localStorage.removeItem('sb_session');
+  localStorage.removeItem('mp_user');
+}
+async function sbRefreshSession(){
+  try{
+    const s=localStorage.getItem('sb_session');
+    if(!s) return false;
+    const sess=JSON.parse(s);
+    if(!sess.refresh_token) return false;
+    const r=await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,{
+      method:'POST',
+      headers:{'apikey':SUPABASE_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({refresh_token:sess.refresh_token})
+    });
+    if(!r.ok) return false;
+    const d=await r.json();
+    localStorage.setItem('sb_session',JSON.stringify(d));
+    localStorage.setItem('mp_user',JSON.stringify({email:d.user.email,name:d.user.user_metadata?.name||d.user.email.split('@')[0],ts:Date.now()}));
+    return true;
+  }catch(e){return false;}
+}
+
+// ── SUPABASE DATA SYNC ────────────────────────────────────────────────────
+// All data is stored in one row per key in a key-value table called 'appdata'
+// Schema: id (text PK), value (text/json)
+// Keys: 'candidates', 'settings', 'nextId'
+
+async function saveToSupabase(){
+  try{
+    const payload=[
+      {id:'candidates',value:JSON.stringify(data)},
+      {id:'nextId',value:String(nextId)},
+      {id:'settings',value:JSON.stringify({consultants,sites,pemTypes,customColumns})},
+    ];
+    for(const row of payload){
+      await sbUpsert('appdata',row);
+    }
+    const now=Date.now();
+    localStorage.setItem('oiq5_lastSaved',String(now));
+    updateLastSavedLabel(now);
+  }catch(e){
+    console.error('Supabase save error:',e);
+    showToast('⚠ Save failed — check connection');
+  }
+}
+
+async function loadFromSupabase(){
+  try{
+    const rows=await sbGet('appdata');
+    const map={};
+    rows.forEach(r=>map[r.id]=r.value);
+
+    if(map.candidates){
+      data=JSON.parse(map.candidates);
+      // Run same migrations as loadLS
+      data.forEach(c=>{
+        if(c.archived===undefined)c.archived=false;
+        if(!c.archiveReason)c.archiveReason='';
+        if(!c.flightStatus)c.flightStatus='';if(!c.flightNotes)c.flightNotes='';
+        if(!c.positionNo)c.positionNo='';if(!c.contractType)c.contractType='';if(!c.woEndDate)c.woEndDate='';
+        if(!c.cdates)c.cdates={};if(!c.log)c.log=[];
+        if(!c.kanbanStage)c.kanbanStage='';if(!c.stageEnteredAt)c.stageEnteredAt=Date.now();
+        if(!c.addedAt)c.addedAt=Date.now()-86400000*5;
+        if(!c.actions)c.actions=[];
+        if(!c.woNotes)c.woNotes='';if(!c.medNotes)c.medNotes='';
+        if(!c.mmpStatus)c.mmpStatus='';if(!c.mmpNotes)c.mmpNotes='';
+        if(c.flightConfirmedAt===undefined)c.flightConfirmedAt=(c.flightStatus==='Confirmed'||c.flightStatus==='N/A')?(c.addedAt?c.addedAt+864e5*7:null):null;
+        if('mmp' in c.checks) delete c.checks.mmp;
+        if('pemResults' in c.checks) delete c.checks.pemResults;
+        // Migrate old values
+        if(c.fgWO==='Fully Approved')c.fgWO='Activated';
+        if(c.fgWO==='Pending Approval')c.fgWO='Pending External Acceptance';
+        if(c.fgWO==='Submitted')c.fgWO='Pending External Acceptance';
+        if(c.fgJP==='Active')c.fgJP='Submitted';
+        if(c.contractType==='IC')c.contractType='Independent Consultant';
+        if(c.contractType==='PAYG')c.contractType='Casual';
+        if(c.pemResult==='Fit with restrictions')c.pemResult='Fit with Restrictions';
+        if(c.pemResult==='Pending')c.pemResult='Awaiting Results';
+        if(c.checks.ppe==='Pending')c.checks.ppe='';
+        if(!c.log||c.log.length===0)c.log=[{ts:c.addedAt,msg:'Candidate added to pipeline',type:'add'}];
+        customColumns.forEach(col=>{if(!(col.key in c.checks))c.checks[col.key]='';});
+      });
+    } else {
+      // First time — start empty (no seed data in production)
+      data=[];
+    }
+    if(map.nextId) nextId=parseInt(map.nextId)||13;
+    if(map.settings){
+      const s=JSON.parse(map.settings);
+      if(s.consultants)consultants=s.consultants;
+      if(s.sites)sites=s.sites;
+      if(s.pemTypes)pemTypes=s.pemTypes;
+      if(s.customColumns)customColumns=s.customColumns;
+    }
+    return true;
+  }catch(e){
+    console.error('Supabase load error:',e);
+    return false;
+  }
+}
+
+// Override saveLS to save to Supabase instead of localStorage
+function saveLS(){
+  // Still save locally as cache for offline resilience
+  try{
+    localStorage.setItem('oiq5_d',JSON.stringify(data));
+    localStorage.setItem('oiq5_id',''+nextId);
+    localStorage.setItem('oiq5_cons',JSON.stringify(consultants));
+    localStorage.setItem('oiq5_sites',JSON.stringify(sites));
+    localStorage.setItem('oiq5_pem',JSON.stringify(pemTypes));
+    localStorage.setItem('oiq5_cols',JSON.stringify(customColumns));
+  }catch(e){}
+  // Save to Supabase (async, non-blocking)
+  saveToSupabase();
+  const now=Date.now();
+  localStorage.setItem('oiq5_lastSaved',''+now);
+  updateLastSavedLabel(now);
+}
+
 // ── AUTH & LOGIN SCREEN ───────────────────────────────────────────────────
 let lnPwVisible=false;
 function lnTogglePw(){
@@ -3322,45 +3496,36 @@ function showAppScreen(){
   const ls=document.getElementById('login-screen');
   if(ls){ls.style.opacity='0';setTimeout(()=>{ls.style.display='none';},300);}
 }
-function handleLogin(e){
+async function handleLogin(e){
   e.preventDefault();
   lnHideError();
   const email=document.getElementById('ln-email').value.trim();
   const password=document.getElementById('ln-password').value;
   if(!email||!password){lnShowError('Please enter your email and password.');return;}
   lnSetLoading(true);
-  // ── PLACEHOLDER — replace with Supabase auth when keys are ready ──────
-  setTimeout(()=>{
-    const TEST_USERS=[
-      {email:'admin@mobepro.com',password:'admin123',name:'Admin'},
-      {email:'ben@mobepro.com',password:'ben123',name:'Ben'},
-      {email:'anne@mobepro.com',password:'anne123',name:'Anne'},
-      {email:'elly@mobepro.com',password:'elly123',name:'Elly'},
-    ];
-    const user=TEST_USERS.find(u=>u.email===email&&u.password===password);
-    if(!user){
-      lnSetLoading(false);
-      lnShowError('Incorrect email or password. Please try again.');
-      document.getElementById('ln-password').value='';
-      document.getElementById('ln-password').focus();
-      return;
-    }
-    localStorage.setItem('mp_user',JSON.stringify({email:user.email,name:user.name,ts:Date.now()}));
-    // Show success then reveal app
+  try{
+    await sbSignIn(email,password);
+    // Load data from Supabase
+    document.getElementById('ln-success-sub').textContent='Loading your data…';
     document.getElementById('ln-form-state').style.display='none';
-    const ss=document.getElementById('ln-success');
-    ss.style.display='flex';
-    document.getElementById('ln-success-sub').textContent=`Welcome, ${user.name}! Loading MobePro…`;
+    document.getElementById('ln-success').style.display='flex';
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
       document.getElementById('ln-bar-fill').style.width='100%';
     }));
-    setTimeout(()=>showAppScreen(),2600);
-  },1000);
-  // ── END PLACEHOLDER ───────────────────────────────────────────────────
+    await loadFromSupabase();
+    updateBadges();
+    renderDash();
+    setTimeout(()=>showAppScreen(),2000);
+  }catch(err){
+    lnSetLoading(false);
+    lnShowError(err.message||'Login failed. Please check your credentials.');
+    document.getElementById('ln-password').value='';
+    document.getElementById('ln-password').focus();
+  }
 }
-function logOut(){
+async function logOut(){
   if(!confirm('Sign out of MobePro?')) return;
-  localStorage.removeItem('mp_user');
+  await sbSignOut();
   showLoginScreen();
 }
 
@@ -3373,30 +3538,64 @@ function updateClock(){
   if(d)d.textContent=now.toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
 }
 
-loadLS();loadTheme();updateBadges();renderDash();
-updateClock();
-setInterval(updateClock,1000);
-// Auth check — show login screen if not authenticated, else show app
-(function(){
+// ── INIT ──────────────────────────────────────────────────────────────────
+(async function(){
+  loadTheme();
+  updateClock();
+  setInterval(updateClock,1000);
+
+  // Check for existing session
   const u=localStorage.getItem('mp_user');
-  if(u){
-    try{const parsed=JSON.parse(u);if(parsed.email)showAppScreen();}
-    catch(e){showLoginScreen();}
+  const sess=localStorage.getItem('sb_session');
+
+  if(u&&sess){
+    try{
+      // Try to refresh the session silently
+      const refreshed=await sbRefreshSession();
+      if(refreshed){
+        // Load data from Supabase
+        const loaded=await loadFromSupabase();
+        if(loaded){
+          updateBadges();renderDash();
+          showAppScreen();
+        } else {
+          // Supabase load failed — try localStorage cache
+          loadLS();updateBadges();renderDash();
+          showAppScreen();
+          showToast('⚠ Could not reach database — showing cached data',4000);
+        }
+      } else {
+        // Session expired — show login
+        loadLS();updateBadges();renderDash();
+        showLoginScreen();
+      }
+    }catch(e){
+      loadLS();updateBadges();renderDash();
+      showLoginScreen();
+    }
   } else {
+    // No session — load local data in background, show login
+    loadLS();updateBadges();renderDash();
     showLoginScreen();
   }
-})();
-// Show mobile tabs nav on small screens
-if(window.innerWidth<=800){
-  const mtn=document.querySelector('.mobile-tabs-nav');
-  if(mtn)mtn.style.display='block';
-}
-window.addEventListener('resize',()=>{
-  if(window.innerWidth>800){
-    document.getElementById('sidebar').classList.remove('mobile-open');
-    document.getElementById('sidebar-overlay').classList.remove('open');
+
+  // Mobile setup
+  if(window.innerWidth<=800){
+    const mtn=document.querySelector('.mobile-tabs-nav');
+    if(mtn)mtn.style.display='block';
   }
-});
+  window.addEventListener('resize',()=>{
+    if(window.innerWidth>800){
+      document.getElementById('sidebar').classList.remove('mobile-open');
+      document.getElementById('sidebar-overlay').classList.remove('open');
+    }
+  });
+
+  // Keep Supabase awake — ping every 5 minutes to prevent free tier pause
+  setInterval(async()=>{
+    try{await fetch(`${SUPABASE_URL}/rest/v1/appdata?select=id&limit=1`,{headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+sbToken()}});}catch(e){}
+  },300000);
+})();
 </script>
 </body>
 </html>
