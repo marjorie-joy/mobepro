@@ -1104,12 +1104,12 @@ const BASE_CL_DEF=[
     {key:'brunelInduction',label:'Brunel HSE Induction',opts:null},
   ]},
   {group:'Contract',items:[
-    {key:'contract',label:'Contract',opts:['','Pending Work Order','Sent','Signed']},
+    {key:'contract',label:'Contract',opts:['','Sent','Signed']},
   ]},
   {group:'Medical',items:[
-    {key:'ppe',label:'PPE issued',opts:['','Complete','N/A']},
   ]},
   {group:'Site readiness',items:[
+    {key:'ppe',label:'PPE issued',opts:['','Complete','N/A']},
     {key:'cms',label:'CMS',opts:['','Requested','Approved','N/A']},
     {key:'fmgInductions',label:'FMG online inductions',opts:null},
     {key:'f2fInduction',label:'F2F induction (SF)',opts:['','Booked','Complete','N/A'],hasDate:true,hasTime:true},
@@ -1248,7 +1248,7 @@ function flightBadge(v){
   return`<span class="badge bg-gray">—</span>`;
 }
 function archiveBadge(r){return`<span class="badge bg-archive">${r||'Archived'}</span>`;}
-function ckCls(v){return v==='Complete'||v==='N/A'||v==='Approved'||v==='Confirmed'||v==='Activated'||v==='Signed'||v==='Fit'||v==='Fit with Restrictions'||v==='Fit with Recommendations'?'ck-done':v==='Sent'||v==='Requested'||v==='In Progress'||v==='Pending External Acceptance'||v==='Awaiting Results'||v==='Further Review Required'?'ck-sent':v==='Pending'||v==='Not Started'||v==='Pending Work Order'?'ck-pend':'ck-none';}
+function ckCls(v){return v==='Complete'||v==='N/A'||v==='Approved'||v==='Confirmed'||v==='Activated'||v==='Signed'||v==='Fit'||v==='Fit with Restrictions'||v==='Fit with Recommendations'?'ck-done':v==='Sent'||v==='Requested'||v==='In Progress'||v==='Pending External Acceptance'||v==='Awaiting Results'||v==='Further Review Required'?'ck-sent':v==='Pending'||v==='Not Started'?'ck-pend':'ck-none';}
 function ckIco(v){
   if(v==='Complete'||v==='N/A'||v==='Approved'||v==='Confirmed')return`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="9" height="9"><polyline points="20 6 9 17 4 12"/></svg>`;
   if(v==='Sent'||v==='Requested'||v==='In Progress')return`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="9" height="9"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>`;
@@ -1344,7 +1344,7 @@ function loadLS(){
         if(c.pemResult==='Awaiting Results') c.pemResult='Awaiting Results';
         if(c.checks.ppe==='Pending') c.checks.ppe='';
         if(c.checks.contract==='Complete') c.checks.contract='Signed';
-        if(c.checks.contract==='Pending') c.checks.contract='Pending Work Order';
+        if(c.checks.contract==='Pending'||c.checks.contract==='Pending Work Order') c.checks.contract='';
         customColumns.forEach(col=>{if(!(col.key in c.checks))c.checks[col.key]='';});
         // Seed initial log entry if candidate has no logs at all
         if(!c.log||c.log.length===0){
@@ -1694,7 +1694,6 @@ function renderCands(){
     <select id="f-contract" onchange="filterState.contract=this.value;renderTableOnly()">
       <option value="">Contract — all</option>
       <option value="blank"${selOpt('blank',filterState.contract)}>Not started</option>
-      <option value="Pending Work Order"${selOpt('Pending Work Order',filterState.contract)}>Pending Work Order</option>
       <option value="Sent"${selOpt('Sent',filterState.contract)}>Sent</option>
       <option value="Signed"${selOpt('Signed',filterState.contract)}>Signed</option>
     </select>
@@ -1775,7 +1774,6 @@ function renderTableOnly(){
     if(!v||v==='') return`<span class="badge bg-gray">—</span>`;
     if(v==='Signed') return`<span class="badge bg-green">✓ Signed</span>`;
     if(v==='Sent') return`<span class="badge bg-info">→ Sent</span>`;
-    if(v==='Pending Work Order') return`<span class="badge bg-warn">⏳ Pending WO</span>`;
     if(v==='N/A') return`<span class="badge bg-gray">N/A</span>`;
     return`<span class="badge bg-gray">${v}</span>`;
   }
@@ -1942,7 +1940,7 @@ function renderOnboardTab(c){
       <div class="fg-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="6 9 12 15 18 9"/></svg></div>
       <div class="fg-stage" style="flex-wrap:wrap;gap:6px">
         <span class="fg-stage-lbl">Stage 2 — Work order <span style="color:var(--danger);font-size:10px">★ critical</span></span>
-        <select class="cl-sel" id="pd-wo" onchange="panelDraft.fgWO=this.value;refreshGate();markDirty()">${FG_WO.map(o=>`<option${o===panelDraft.fgWO?' selected':''}>${o}</option>`).join('')}</select>
+        <select class="cl-sel" id="pd-wo" onchange="panelDraft.fgWO=this.value;refreshGate();refreshContractLock();markDirty()">${FG_WO.map(o=>`<option${o===panelDraft.fgWO?' selected':''}>${o}</option>`).join('')}</select>
       </div>
       <div style="margin-top:9px">
         <label class="fl" style="margin-bottom:4px;display:block">WO notes</label>
@@ -2012,51 +2010,59 @@ function renderOnboardTab(c){
     <label class="fl" style="display:block;margin-bottom:4px">WO actual end date <span style="color:var(--danger);font-size:10px">★ required for Independent Consultant/PTY</span></label>
     <input class="fi" type="date" id="pd-woe" value="${panelDraft.woEndDate||''}" oninput="panelDraft.woEndDate=this.value;markDirty()" style="height:30px;font-size:12px;max-width:200px">
   </div>`;
-  // Contract section — shown after FG/WO, prompted when WO = Pending External Acceptance
-  const woIsPending=panelDraft.fgWO==='Pending External Acceptance'||panelDraft.fgWO==='Activated';
+  // Contract section — locked until WO = Pending External Acceptance or Activated
+  const woAllowsContract=panelDraft.fgWO==='Pending External Acceptance'||panelDraft.fgWO==='Activated';
   const contractV=panelDraft.checks.contract||'';
-  const contractBannerHtml=woIsPending&&contractV!=='Signed'?`
+  const contractBannerHtml=woAllowsContract&&contractV!=='Signed'?`
     <div style="background:var(--info-light);border:1px solid var(--info);border-radius:var(--r);padding:9px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--info-text);font-weight:600;margin-bottom:8px">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       Work Order is ${panelDraft.fgWO} — contract can now be issued
     </div>`:'';
+  const contractLockedHtml=!woAllowsContract?`
+    <div id="contract-lock-banner" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:9px 12px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text3);font-weight:500;margin-bottom:8px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+      Contract locked — available once Work Order is set to Pending External Acceptance
+    </div>`:`<div id="contract-lock-banner" style="display:none"></div>`;
   const contractSec=`<div class="p-section">
     <div class="psec">Contract</div>
-    ${contractBannerHtml}
+    ${contractBannerHtml}${contractLockedHtml}
     <div class="cl-item">
       <div class="cl-ck ${ckCls(contractV)}">${ckIco(contractV)}</div>
       <div class="cl-body"><div class="cl-lbl">Contract</div>
         <div class="cl-ctrls">
-          <select class="cl-sel" data-key="contract" onchange="draftCk(this)">
-            ${['','Pending Work Order','Sent','Signed'].map(o=>`<option${o===contractV?' selected':''}>${o}</option>`).join('')}
+          <select class="cl-sel" data-key="contract" onchange="draftCk(this)"${!woAllowsContract?' disabled title="Work Order must be Pending External Acceptance first"':''}>
+            ${['','Sent','Signed'].map(o=>`<option${o===contractV?' selected':''}>${o}</option>`).join('')}
           </select>
-          <input class="cl-note" type="text" data-key="contract" placeholder="Note…" value="${(panelDraft.cknotes.contract||'').replace(/"/g,'&quot;')}" oninput="draftNote(this)">
+          <input class="cl-note" type="text" data-key="contract" placeholder="Note…" value="${(panelDraft.cknotes.contract||'').replace(/"/g,'&quot;')}" oninput="draftNote(this)"${!woAllowsContract?' disabled':''}>
         </div>
       </div>
     </div>
   </div>`;
 
-  // Pre-mob completion banner
   const preMobDone=isPreMobComplete({checks:panelDraft.checks});
   const preMobBanner=preMobDone?`
-    <div style="background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--r);padding:9px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--accent-text);font-weight:600;margin-bottom:8px">
+    <div class="premob-banner" style="background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--r);padding:9px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--accent-text);font-weight:600;margin-bottom:8px">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>
-      Pre-mobilisation complete — Pre-app, WorkPro DD and Brunel HSE all done
-    </div>`:'';
+      Pre-mobilisation complete — Pre-app form, WorkPro DD and Brunel HSE all done
+    </div>`:`
+    <div class="premob-banner" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:9px 12px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text3);font-weight:500;margin-bottom:8px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      Complete Pre-app form, WorkPro DD and Brunel HSE to finish pre-mobilisation
+    </div>`;
 
-  let clHtml='';
+  let preMobHtml='';
+  let siteHtml='';
   getClDef().forEach(g=>{
-    // Contract group is rendered separately above — skip it here
-    if(g.group==='Contract') return;
+    if(g.group==='Contract') return; // rendered separately
     const groupItems=g.items.filter(item=>item.key!=='pemResults'&&item.key!=='mmp');
     if(!groupItems.length) return;
-    // Add pre-mob banner before Pre-mobilisation group
-    if(g.group==='Pre-mobilisation') clHtml+=`<div class="p-section">${preMobBanner}<div class="psec">Pre-mobilisation</div>`;
-    else clHtml+=`<div class="p-section"><div class="psec">${g.group}</div>`;
+    let sectionHtml='';
+    if(g.group==='Pre-mobilisation') sectionHtml+=`<div class="p-section">${preMobBanner}<div class="psec">Pre-mobilisation</div>`;
+    else sectionHtml+=`<div class="p-section"><div class="psec">${g.group}</div>`;
     groupItems.forEach(item=>{
       const v=panelDraft.checks[item.key]||'',n=(panelDraft.cknotes[item.key]||''),dt=(panelDraft.cdates[item.key]||'');
       const opts=item.opts||STD_OPTS;
-      clHtml+=`<div class="cl-item">
+      sectionHtml+=`<div class="cl-item">
         <div class="cl-ck ${ckCls(v)}">${ckIco(v)}</div>
         <div class="cl-body"><div class="cl-lbl">${item.label}</div>
           <div class="cl-ctrls">
@@ -2067,11 +2073,14 @@ function renderOnboardTab(c){
         </div>
       </div>`;
     });
-    clHtml+='</div>';
+    sectionHtml+='</div>';
+    if(g.group==='Pre-mobilisation') preMobHtml=sectionHtml;
+    else siteHtml+=sectionHtml;
   });
 
-  document.getElementById('panel-body').innerHTML=`${archBanner}${arBanner}<div class="p-section"><div class="psec">Candidate details</div>${ig}</div>${fgSec}${contractSec}${pemSec}${woEndSec}${clHtml}`;
-  refreshGate();refreshContractNote();
+  // Order: Candidate details → FG → Contract → Pre-mob → Medical → Site readiness
+  document.getElementById('panel-body').innerHTML=`${archBanner}${arBanner}<div class="p-section"><div class="psec">Candidate details</div>${ig}</div>${fgSec}${contractSec}${preMobHtml}${pemSec}${woEndSec}${siteHtml}`;
+  refreshGate();refreshContractNote();refreshPreMobBanner();refreshContractLock();
 }
 
 // ── PROFILE EDIT TAB ──────────────────────────────────────────────────────
@@ -2243,8 +2252,40 @@ function refreshGate(){
   const fs=document.getElementById('pd-fs');const fn=document.getElementById('pd-fn');
   if(fs){fs.disabled=!ok;}
   if(fn){fn.disabled=!ok;}
+  // Lock/unlock contract based on WO status
+  const contractAllowed=panelDraft.fgWO==='Pending External Acceptance'||panelDraft.fgWO==='Activated';
+  const contractSel=document.querySelector('.cl-sel[data-key="contract"]');
+  const contractNote=document.querySelector('.cl-note[data-key="contract"]');
+  if(contractSel)contractSel.disabled=!contractAllowed;
+  if(contractNote)contractNote.disabled=!contractAllowed;
 }
-function refreshMMP(){
+function refreshContractLock(){
+  const allowed=panelDraft.fgWO==='Pending External Acceptance'||panelDraft.fgWO==='Activated';
+  const contractSel=document.querySelector('.cl-sel[data-key="contract"]');
+  const contractNote=document.querySelector('.cl-note[data-key="contract"]');
+  if(contractSel) contractSel.disabled=!allowed;
+  if(contractNote) contractNote.disabled=!allowed;
+  // Update contract banner
+  const bannerEl=document.getElementById('contract-lock-banner');
+  if(!bannerEl) return;
+  if(allowed){
+    const contractV=panelDraft.checks.contract||'';
+    if(contractV!=='Signed'){
+      bannerEl.style.background='var(--info-light)';
+      bannerEl.style.borderColor='var(--info)';
+      bannerEl.style.color='var(--info-text)';
+      bannerEl.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Work Order is ${panelDraft.fgWO} — contract can now be issued`;
+    } else {
+      bannerEl.style.display='none';
+    }
+  } else {
+    bannerEl.style.background='var(--surface2)';
+    bannerEl.style.borderColor='var(--border)';
+    bannerEl.style.color='var(--text3)';
+    bannerEl.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> Contract locked — available once Work Order is set to Pending External Acceptance`;
+    bannerEl.style.display='flex';
+  }
+}
   const sec=document.getElementById('mmp-section');if(!sec)return;
   const r=panelDraft.pemResult||'';
   const show=r&&r!=='Awaiting Results'&&r!=='Fit'&&r!=='';
@@ -2261,7 +2302,30 @@ function refreshContractNote(){
     const ws=document.getElementById('wo-end-section');if(ws)ws.style.display='none';
   }
 }
-function draftCk(el){panelDraft.checks[el.dataset.key]=el.value;const ck=el.closest('.cl-item').querySelector('.cl-ck');ck.className=`cl-ck ${ckCls(el.value)}`;ck.innerHTML=ckIco(el.value);markDirty();}
+function draftCk(el){
+  panelDraft.checks[el.dataset.key]=el.value;
+  const ck=el.closest('.cl-item').querySelector('.cl-ck');
+  ck.className=`cl-ck ${ckCls(el.value)}`;
+  ck.innerHTML=ckIco(el.value);
+  markDirty();
+  refreshPreMobBanner();
+}
+function refreshPreMobBanner(){
+  const banner=document.querySelector('.premob-banner');
+  if(!banner) return;
+  const done=isPreMobComplete({checks:panelDraft.checks});
+  if(done){
+    banner.style.background='var(--accent-light)';
+    banner.style.borderColor='var(--accent)';
+    banner.style.color='var(--accent-text)';
+    banner.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg> Pre-mobilisation complete — Pre-app form, WorkPro DD and Brunel HSE all done`;
+  } else {
+    banner.style.background='var(--surface2)';
+    banner.style.borderColor='var(--border)';
+    banner.style.color='var(--text3)';
+    banner.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Complete Pre-app form, WorkPro DD and Brunel HSE to finish pre-mobilisation`;
+  }
+}
 function draftNote(el){panelDraft.cknotes[el.dataset.key]=el.value;markDirty();}
 function draftDate(el){panelDraft.cdates[el.dataset.key]=el.value;markDirty();}
 let panelDirty=false;
@@ -3479,7 +3543,7 @@ async function loadFromSupabase(){
         if(c.pemResult==='Pending')c.pemResult='Awaiting Results';
         if(c.checks.ppe==='Pending')c.checks.ppe='';
         if(c.checks.contract==='Complete')c.checks.contract='Signed';
-        if(c.checks.contract==='Pending')c.checks.contract='Pending Work Order';
+        if(c.checks.contract==='Pending'||c.checks.contract==='Pending Work Order') c.checks.contract='';
         if(!c.log||c.log.length===0)c.log=[{ts:c.addedAt,msg:'Candidate added to pipeline',type:'add'}];
         customColumns.forEach(col=>{if(!(col.key in c.checks))c.checks[col.key]='';});
       });
