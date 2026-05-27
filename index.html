@@ -2286,6 +2286,7 @@ function refreshContractLock(){
     bannerEl.style.display='flex';
   }
 }
+function refreshMMP(){
   const sec=document.getElementById('mmp-section');if(!sec)return;
   const r=panelDraft.pemResult||'';
   const show=r&&r!=='Awaiting Results'&&r!=='Fit'&&r!=='';
